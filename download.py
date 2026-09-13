@@ -121,9 +121,10 @@ def snapshot_universe() -> pd.DataFrame:
     return df
 
 
-def load_prices(days: int | None = None) -> pd.DataFrame:
+def load_prices(days: int | None = None, prices_dir=None) -> pd.DataFrame:
     """Load stored sessions into one frame, most recent `days` sessions."""
-    files = sorted(C.PRICES.glob("*.parquet"))
+    prices_dir = prices_dir or C.PRICES
+    files = sorted(prices_dir.glob("*.parquet"))
     if days:
         files = files[-days:]
     if not files:
@@ -135,8 +136,9 @@ def load_prices(days: int | None = None) -> pd.DataFrame:
     return df.sort_values(["ticker", "date"]).reset_index(drop=True)
 
 
-def latest_universe() -> pd.DataFrame:
-    files = sorted(C.UNIVERSE.glob("*.parquet"))
+def latest_universe(universe_dir=None) -> pd.DataFrame:
+    universe_dir = universe_dir or C.UNIVERSE
+    files = sorted(universe_dir.glob("*.parquet"))
     if not files:
         return pd.DataFrame()
     return pd.read_parquet(files[-1])

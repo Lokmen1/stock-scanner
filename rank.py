@@ -9,6 +9,34 @@ import config as C
 
 
 # ------------------------------------------------------------------ universe
+# SIC code -> coarse sector, using the standard SIC division ranges. Coarse by
+# design: this is for grouping signals in `evaluate`, not sector-fund-grade
+# classification.
+_SIC_SECTORS = [
+    (100, 999, "Agriculture"),
+    (1000, 1499, "Mining"),
+    (1500, 1799, "Construction"),
+    (2000, 3999, "Manufacturing"),
+    (4000, 4999, "Transportation/Utilities"),
+    (5000, 5199, "Wholesale Trade"),
+    (5200, 5999, "Retail Trade"),
+    (6000, 6799, "Finance/Insurance/Real Estate"),
+    (7000, 8999, "Services"),
+    (9100, 9999, "Public Administration"),
+]
+
+
+def sic_to_sector(sic) -> str:
+    """Map a 4-digit SIC code to a coarse sector. NaN/unmapped -> 'Unknown'."""
+    if sic is None or pd.isna(sic):
+        return "Unknown"
+    sic = int(sic)
+    for lo, hi, name in _SIC_SECTORS:
+        if lo <= sic <= hi:
+            return name
+    return "Unknown"
+
+
 def apply_universe(df: pd.DataFrame, ref: pd.DataFrame | None) -> pd.DataFrame:
     """Liquidity and quality gates. Returns the investable slice only."""
     out = df[
@@ -25,8 +53,14 @@ def apply_universe(df: pd.DataFrame, ref: pd.DataFrame | None) -> pd.DataFrame:
             # Only exclude where we actually KNOW the cap is too small.
             # Missing share counts must not silently delete the name.
             out = out[~(out["market_cap"] < C.MIN_MARKET_CAP)]
+        if "sic_code" in ref.columns:
+            sic = ref.set_index("ticker")["sic_code"]
+            out["industry"] = out["ticker"].map(sic).map(sic_to_sector)
+        else:
+            out["industry"] = "Unknown"
     else:
         out["market_cap"] = np.nan
+        out["industry"] = "Unknown"
 
     # Structural ticker junk that slips through type filters
     bad = out["ticker"].str.contains(r"[.\-]W$|[.\-]U$|[.\-]R$|WS$", regex=True, na=False)
@@ -76,39 +110,31 @@ def bucket(d: pd.DataFrame) -> dict[str, pd.DataFrame]:
     dislocation = d[(d["ret_z"] <= -C.Z_RETURN_GATE) & (d["vol_z"] >= C.Z_VOLUME_GATE)]
     # Heavy volume, little price movement: someone is transacting size and the
     # price has not resolved it yet. The only one of the three that is not
-    # already visible on every free screener.
-    silent = d[(d["vol_z"] >= C.Z_VOLUME_STRONG) & (d["ret_z"].abs() <= C.Z_RETURN_QUIET)]
+    # already visible on every free screener. Deliberately NOT called
+    # "accumulation" — there is a seller for every buyer, and this pattern is
+    # equally consistent with distribution, block crossing, or index flow.
+    high_participation = d[(d["vol_z"] >= C.Z_VOLUME_STRONG) & (d["ret_z"].abs() <= C.Z_RETURN_QUIET)]
 
     return {
         "momentum": momentum.nlargest(C.MAX_PER_BUCKET, "score"),
         "dislocation": dislocation.nlargest(C.MAX_PER_BUCKET, "score"),
-        "silent_accumulation": silent.nlargest(C.MAX_PER_BUCKET, "vol_z"),
+        "high_participation_low_resolution": high_participation.nlargest(C.MAX_PER_BUCKET, "vol_z"),
     }
 
 
-# ------------------------------------------------------------------ context
-def add_persistence(buckets: dict, history: pd.DataFrame, days: int = 5) -> dict:
-    """How many of the last `days` sessions did this name already appear?
+def raw_crossings(d: pd.DataFrame) -> dict[str, int]:
+    """Names crossing each gate before MAX_PER_BUCKET truncates the list.
 
-    A name on the list three days running is a different object from a one-day
-    spike — usually a developing situation rather than a single print.
+    Mirrors the exact gate conditions in `bucket()` above — read-only, changes
+    nothing about what qualifies. Lets the report show how loose or tight
+    today actually was relative to the cap, and relative to its own history.
     """
-    if history.empty:
-        for b in buckets.values():
-            b["streak"] = 1
-        return buckets
-    cutoff = history["date"].max() - pd.Timedelta(days=days * 2)
-    recent = history[history["date"] >= cutoff]
-    counts = recent.groupby("ticker").size()
-    for b in buckets.values():
-        b["streak"] = b["ticker"].map(counts).fillna(0).astype(int) + 1
-    return buckets
-
-
-def is_rebalance_day(date: pd.Timestamp) -> bool:
-    """Third Friday of Mar/Jun/Sep/Dec — quarterly index rebalance and triple
-    witching. Enormous volume with no fundamental content. Nokia's Euro Stoxx 50
-    inclusion is the same class of event: real volume, nothing to research."""
-    if date.month not in (3, 6, 9, 12) or date.weekday() != 4:
-        return False
-    return 15 <= date.day <= 21
+    d = d[~d["suspect_corp_action"]]
+    momentum = (d["ret_z"] >= C.Z_RETURN_GATE) & (d["vol_z"] >= C.Z_VOLUME_GATE)
+    dislocation = (d["ret_z"] <= -C.Z_RETURN_GATE) & (d["vol_z"] >= C.Z_VOLUME_GATE)
+    high_participation = (d["vol_z"] >= C.Z_VOLUME_STRONG) & (d["ret_z"].abs() <= C.Z_RETURN_QUIET)
+    return {
+        "momentum": int(momentum.sum()),
+        "dislocation": int(dislocation.sum()),
+        "high_participation_low_resolution": int(high_participation.sum()),
+    }

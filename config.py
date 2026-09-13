@@ -9,13 +9,32 @@ UNIVERSE = DATA / "universe"
 SIGNALS = DATA / "signals"
 REPORTS = ROOT / "reports"
 
-for d in (PRICES, UNIVERSE, SIGNALS, REPORTS):
+# Synthetic-data sandbox for `demo`. Kept entirely separate from the real
+# directories above so demo runs can never overwrite real prices, universe
+# snapshots, or the signal log (which is timestamped evidence, not cache).
+DEMO_PRICES = DATA / "demo_prices"
+DEMO_UNIVERSE = DATA / "demo_universe"
+
+# Local cache of ticker -> SIC code, sourced from SEC (Polygon's bulk
+# reference endpoint doesn't return SIC — see sic.py). Rebuildable, not
+# evidence, so it lives outside data/signals/ and is gitignored like prices.
+REFERENCE = DATA / "reference"
+SIC_MAP = REFERENCE / "sic_map.parquet"
+
+for d in (PRICES, UNIVERSE, SIGNALS, REPORTS, DEMO_PRICES, DEMO_UNIVERSE, REFERENCE):
     d.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------- SEC (SIC lookup)
+# SEC requires a descriptive User-Agent identifying the requester on every
+# request to sec.gov / data.sec.gov, or it may block the client.
+SEC_USER_AGENT = "stock-scanner (messaoudi.lokman@gmail.com)"
+SEC_REQUESTS_PER_SEC = 8          # SEC's stated guidance is ~10/sec; stay under it
+SIC_REFRESH_DAYS = 30             # SIC codes almost never change
 
 # ---------------------------------------------------------------- data source
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY", "")
 POLYGON_BASE = "https://api.polygon.io"
-REQUEST_SLEEP = 0.02          # paid tier: unlimited. free tier: set to 12.0
+REQUEST_SLEEP = 12.0          # paid tier: unlimited. free tier: set to 12.0
 
 # ---------------------------------------------------------------- universe
 MIN_PRICE = 5.0
@@ -38,10 +57,12 @@ ROBUST_SCALE = True
 # ---------------------------------------------------------------- thresholds
 # Absolute gates. These are what let the scanner return FEWER than N names —
 # or none at all — on a quiet day. Rank-based scoring alone cannot do that.
-Z_RETURN_GATE = 2.0
-Z_VOLUME_GATE = 2.0
-Z_VOLUME_STRONG = 3.0
-Z_RETURN_QUIET = 1.0          # "silent accumulation" needs a SMALL price move
+# Calibrated against 90 days of real data (September 2026). Do not retune
+# until `evaluate` has at least six months of forward returns to judge against.
+Z_RETURN_GATE = 3.5
+Z_VOLUME_GATE = 3.0
+Z_VOLUME_STRONG = 4.5
+Z_RETURN_QUIET = 0.5          # "high participation, low resolution" needs a SMALL price move
 
 MAX_PER_BUCKET = 10
 WINSORISE_AT = 5.0            # applied to z-scores before display, not before ranking
@@ -80,8 +101,14 @@ SCORE_WEIGHTS_ORTHOGONAL = {
 }
 
 # ---------------------------------------------------------------- calendar
-# Days on which index rebalances flood the tape with non-informational volume.
-# Triple witching / quarterly rebalance: third Friday of Mar, Jun, Sep, Dec.
-FLAG_REBALANCE_DAYS = True
+# Known mechanical-flow days (index reconstitutions, options expiries) are
+# tagged on the signal log via flow_calendar.py, not filtered — see that
+# module for the explicit per-source rules.
 
 FORWARD_HORIZONS = (1, 5, 20)  # trading days, for the evaluation harness
+
+# Path statistics (MFE/MAE, event-time curves) in evaluate(). Separate from
+# FORWARD_HORIZONS above: those are point-in-time snapshots, these describe
+# the whole path from trigger to tau sessions later.
+MFE_MAE_WINDOW = 20        # sessions after trigger over which MFE/MAE are taken
+EVENT_TIME_MAX_TAU = 60    # sessions after trigger the event-time curve covers

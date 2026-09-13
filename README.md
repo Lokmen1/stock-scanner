@@ -55,6 +55,17 @@ a short list, or none. In the demo ~17% of sessions produce nothing, which is
 roughly the right band — 0% means the gates are decorative, above ~40% means
 no research flow.
 
+Real data does not behave like the demo here. Against 90 days of real Polygon
+data (September 2026), the demo-tuned gates (`Z_RETURN_GATE = 2.0`, etc.) never
+produced a no-flag day — a ~2,650-name universe throws that many genuine
+single-name earnings/news days that a 2σ own-history move is common, not rare.
+Gates were re-calibrated to `Z_RETURN_GATE = 3.5`, `Z_VOLUME_GATE = 3.0`,
+`Z_VOLUME_STRONG = 4.5`, `Z_RETURN_QUIET = 0.5` (see the comment in
+`config.py`). At those levels, only a fairly extreme single-name event clears
+the bar — roughly a 3.5σ own-history return move on 3σ volume. Do not retune
+further until `evaluate` has at least six months of forward returns to judge
+against.
+
 **Orthogonalised scoring.** Run `diagnose`: `ret_z`, `rel_ret` and `gap_z`
 correlate at ~0.9+. The original weights therefore put 0.25+0.20+0.15 = 60% of
 the score on a single underlying signal and only 30% on volume, which is the
@@ -80,6 +91,11 @@ reports forward returns against the market, per bucket and for the top-scored
 quintile. If top-quintile excess return isn't clearly above whole-basket excess,
 the scoring layer isn't earning its place and the weights are noise.
 
+`data/signals/` was empty as of 13 Sept 2026 (an earlier demo run had leaked
+synthetic entries into it; these were found and removed, and `log_signals` now
+refuses to write anything matching the synthetic ticker pattern). The first
+genuine entry dates from the first real `scan` after that.
+
 ## What the score is and is not
 
 It is an **attention allocation** — how much research time a name deserves
@@ -90,12 +106,18 @@ letting them harden into a claim.
 ## Known limitations
 
 - Market proxy is the cross-sectional median return, not a cap-weighted index.
-  Sector-relative needs a SIC→sector map; that's the next upgrade.
+  A SIC→sector map now exists (`sic.py`, `data/reference/sic_map.parquet`,
+  ~98% coverage), used for clustering in `evaluate()`. Relative-strength
+  scoring itself is still computed against the whole universe, not sector
+  peers — using the map for that is the next upgrade.
 - Market cap filter applies only where Polygon supplies share counts. Names
   with missing counts are kept rather than silently dropped.
 - Holiday handling is crude — non-trading days return empty and are skipped.
-- Short interest, borrow cost and index-rebalance calendars are not yet wired
-  in. Rebalance days are flagged heuristically (third Friday of quarter-end).
+- Short interest and borrow cost are not yet wired in. Known mechanical-flow
+  days (S&P/FTSE Russell/Nasdaq-100/MSCI rebalances, options expiries) ARE
+  covered — see `flow_calendar.py` — but these are not excluded from scoring;
+  they're tagged via `mechanical_flow_possible` on the signal log instead,
+  since forced flow is real supply/demand information, not noise to delete.
 
 ## Structural caveat
 

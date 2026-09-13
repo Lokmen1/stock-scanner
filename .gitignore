@@ -3,7 +3,10 @@ __pycache__/
 *.pyc
 .env
 .claude/
+.DS_Store
 data/prices/
+data/demo_*/
+data/reference/
 reports/
 
 !data/signals/
