@@ -101,7 +101,7 @@ def render(buckets: dict, date: pd.Timestamp, n_universe: int,
 
 # ------------------------------------------------------------------ logging
 LOG_COLS = ["date", "ticker", "bucket", "score", "close", "ret_1d",
-            "ret_z", "vol_z", "rel_ret", "gap", "breakout", "industry",
+            "ret_z", "vol_z", "rel_ret", "gap", "breakout", "industry", "sic_division",
             "event_id", "event_age", "days_triggered", "max_score", "first_trigger_date",
             "mechanical_flow_possible"]
 

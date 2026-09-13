@@ -60,13 +60,20 @@ def _html_wrap(text: str) -> str:
     )
 
 
-def _send(subject: str, text_body: str, html_body: str, cfg: dict) -> None:
+def _send(subject: str, text_body: str, html_body: str, cfg: dict,
+          attach_filename: str | None = None, attach_text: str | None = None) -> None:
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = cfg["user"]
     msg["To"] = cfg["recipient"]
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype="html")
+    if attach_filename and attach_text is not None:
+        # The inline body still renders in-client for a quick glance, but a
+        # ~92-char-wide table doesn't fit a phone screen either way. A real
+        # file opens in a viewer with proper horizontal scroll/zoom instead.
+        msg.add_attachment(attach_text.encode("utf-8"), maintype="text",
+                           subtype="plain", filename=attach_filename)
 
     with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
         smtp.starttls()
@@ -108,7 +115,9 @@ def send_report(date, report_text: str, buckets: dict,
     cfg = _config()
     _require_config(cfg)
     subject = build_subject(date, buckets, crossings_today, crossings_median)
-    _send(subject, report_text, _html_wrap(report_text), cfg)
+    filename = f"scan_{date:%Y-%m-%d}.txt"
+    _send(subject, report_text, _html_wrap(report_text), cfg,
+          attach_filename=filename, attach_text=report_text)
 
 
 def send_test() -> None:
@@ -118,5 +127,7 @@ def send_test() -> None:
     _require_config(cfg)
     text = ("This is a test message from the stock scanner's mailer.py.\n"
             "If you received this, SMTP_HOST/PORT/USER/PASSWORD and "
-            "REPORT_RECIPIENT are configured correctly.\n")
-    _send("Stock scanner — test email", text, _html_wrap(text), cfg)
+            "REPORT_RECIPIENT are configured correctly. A .txt attachment\n"
+            "should be included too — that's how the nightly report arrives.\n")
+    _send("Stock scanner — test email", text, _html_wrap(text), cfg,
+          attach_filename="test.txt", attach_text=text)

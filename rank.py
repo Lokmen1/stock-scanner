@@ -9,10 +9,99 @@ import config as C
 
 
 # ------------------------------------------------------------------ universe
-# SIC code -> coarse sector, using the standard SIC division ranges. Coarse by
-# design: this is for grouping signals in `evaluate`, not sector-fund-grade
-# classification.
-_SIC_SECTORS = [
+# SIC code -> sector, at two granularities.
+#
+# `sic_to_major_group` (the 2-digit SIC major group, ~80 categories in
+# practice) is the PRIMARY mapping, used as `industry` for clustering in
+# evaluate(). Division-level (~10 categories, `sic_to_division`) is kept only
+# as a secondary column: it is too coarse for clustering — "Manufacturing"
+# alone spans food processing and defence electronics, so treating it as one
+# cluster would flatten unrelated shocks into "one" shock.
+#
+# Major-group titles verified against the 1987 SIC manual structure; code ->
+# major-group arithmetic verified against SEC's own SIC code list (e.g. SIC
+# 3571 "Electronic Computers" falls under major group 35 "Machinery, Except
+# Electrical", not 36 "Electrical & Electronic Equipment" — an artifact of the
+# 1987 classification, not a bug here).
+_SIC_MAJOR_GROUPS = {
+    "01": "Agricultural Production - Crops",
+    "02": "Agricultural Production - Livestock & Animal Specialties",
+    "07": "Agricultural Services",
+    "08": "Forestry",
+    "09": "Fishing, Hunting & Trapping",
+    "10": "Metal Mining",
+    "12": "Bituminous Coal & Lignite Mining",
+    "13": "Crude Petroleum & Natural Gas",
+    "14": "Mining & Quarrying of Nonmetallic Minerals",
+    "15": "General Building Contractors",
+    "16": "Heavy Construction",
+    "17": "Construction - Special Trade Contractors",
+    "20": "Food & Kindred Products",
+    "21": "Tobacco Products",
+    "22": "Textile Mill Products",
+    "23": "Apparel & Other Finished Products",
+    "24": "Lumber & Wood Products",
+    "25": "Furniture & Fixtures",
+    "26": "Paper & Allied Products",
+    "27": "Printing & Publishing",
+    "28": "Chemicals & Allied Products",
+    "29": "Petroleum Refining & Related Industries",
+    "30": "Rubber & Miscellaneous Plastics Products",
+    "31": "Leather & Leather Products",
+    "32": "Stone, Clay, Glass & Concrete Products",
+    "33": "Primary Metal Industries",
+    "34": "Fabricated Metal Products",
+    "35": "Machinery, Except Electrical",
+    "36": "Electrical & Electronic Equipment",
+    "37": "Transportation Equipment",
+    "38": "Measuring, Analyzing & Controlling Instruments",
+    "39": "Miscellaneous Manufacturing Industries",
+    "40": "Railroad Transportation",
+    "41": "Local & Suburban Transit",
+    "42": "Trucking & Warehousing",
+    "44": "Water Transportation",
+    "45": "Air Transportation",
+    "46": "Pipelines, Except Natural Gas",
+    "47": "Transportation Services",
+    "48": "Communications",
+    "49": "Electric, Gas & Sanitary Services",
+    "50": "Wholesale Trade - Durable Goods",
+    "51": "Wholesale Trade - Nondurable Goods",
+    "52": "Retail - Building Materials & Garden Supply",
+    "53": "Retail - General Merchandise Stores",
+    "54": "Retail - Food Stores",
+    "55": "Retail - Auto Dealers & Gasoline Stations",
+    "56": "Retail - Apparel & Accessory Stores",
+    "57": "Retail - Home Furniture & Furnishings",
+    "58": "Retail - Eating & Drinking Places",
+    "59": "Retail - Miscellaneous Retail",
+    "60": "Depository Institutions",
+    "61": "Nondepository Credit Institutions",
+    "62": "Security & Commodity Brokers",
+    "63": "Insurance Carriers",
+    "64": "Insurance Agents & Brokers",
+    "65": "Real Estate",
+    "67": "Holding & Other Investment Offices",
+    "70": "Hotels & Other Lodging Places",
+    "72": "Personal Services",
+    "73": "Business Services",
+    "75": "Automotive Repair & Services",
+    "76": "Miscellaneous Repair Services",
+    "78": "Motion Picture & Video Services",
+    "79": "Amusement & Recreation Services",
+    "80": "Health Services",
+    "81": "Legal Services",
+    "82": "Educational Services",
+    "83": "Social Services",
+    "86": "Membership Organizations",
+    "87": "Engineering & Management Services",
+    "88": "American Depositary Receipts & Foreign Governments",
+    "89": "Services, NEC",
+    "97": "Public Administration / International Affairs",
+    "99": "Nonclassifiable Establishments",
+}
+
+_SIC_DIVISIONS = [
     (100, 999, "Agriculture"),
     (1000, 1499, "Mining"),
     (1500, 1799, "Construction"),
@@ -26,12 +115,27 @@ _SIC_SECTORS = [
 ]
 
 
-def sic_to_sector(sic) -> str:
-    """Map a 4-digit SIC code to a coarse sector. NaN/unmapped -> 'Unknown'."""
+def sic_to_major_group(sic) -> str:
+    """Map a SIC code to its 2-digit major group (~80 categories in practice).
+    NaN/unmapped -> 'Unknown'. Zero-pads to 4 digits before slicing — SEC
+    returns codes like 100 for what the manual prints as "0100"; slicing the
+    unpadded string would give the wrong major group (e.g. "10" for
+    Agriculture instead of "01")."""
+    if sic is None or pd.isna(sic):
+        return "Unknown"
+    code = f"{int(sic):04d}"
+    group = code[:2]
+    title = _SIC_MAJOR_GROUPS.get(group)
+    return f"{group} - {title}" if title else "Unknown"
+
+
+def sic_to_division(sic) -> str:
+    """Map a 4-digit SIC code to a coarse (~10-category) division. Kept as a
+    secondary column only — too coarse to cluster on, see module notes above."""
     if sic is None or pd.isna(sic):
         return "Unknown"
     sic = int(sic)
-    for lo, hi, name in _SIC_SECTORS:
+    for lo, hi, name in _SIC_DIVISIONS:
         if lo <= sic <= hi:
             return name
     return "Unknown"
@@ -54,13 +158,16 @@ def apply_universe(df: pd.DataFrame, ref: pd.DataFrame | None) -> pd.DataFrame:
             # Missing share counts must not silently delete the name.
             out = out[~(out["market_cap"] < C.MIN_MARKET_CAP)]
         if "sic_code" in ref.columns:
-            sic = ref.set_index("ticker")["sic_code"]
-            out["industry"] = out["ticker"].map(sic).map(sic_to_sector)
+            sic = out["ticker"].map(ref.set_index("ticker")["sic_code"])
+            out["industry"] = sic.map(sic_to_major_group)
+            out["sic_division"] = sic.map(sic_to_division)
         else:
             out["industry"] = "Unknown"
+            out["sic_division"] = "Unknown"
     else:
         out["market_cap"] = np.nan
         out["industry"] = "Unknown"
+        out["sic_division"] = "Unknown"
 
     # Structural ticker junk that slips through type filters
     bad = out["ticker"].str.contains(r"[.\-]W$|[.\-]U$|[.\-]R$|WS$", regex=True, na=False)
