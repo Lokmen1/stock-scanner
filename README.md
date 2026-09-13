@@ -4,6 +4,53 @@ Daily statistical scan of the US equity market. No LLM, no news, no options.
 Input: daily OHLCV. Output: a short list of names that did something unusual,
 with enough context to start asking *why*.
 
+## How it works, end to end
+
+- **Universe** (`universe`) — snapshot today's tradeable common-stock universe
+  from Polygon (price/liquidity/market-cap filters applied later, not here).
+  Never overwrites an earlier day's snapshot, so membership becomes a genuine
+  point-in-time record going forward.
+- **Backfill** (`backfill --days N`) — pull N sessions of grouped-daily OHLCV
+  for *every* ticker that traded, before any filter, so price history stays
+  survivorship-free even though today's universe list is not.
+- **Features** (`features.py`) — for each name, robust (median/MAD) z-scores
+  of return, volume, gap and relative-strength, plus 20/60/252-day breakout
+  levels. Robust, not mean/std, so a name's own history of jump days doesn't
+  mute its next genuine surprise.
+- **Corporate-action guard** — a huge move on ordinary volume is flagged and
+  suppressed rather than scored: that combination is almost always an
+  unhandled split/spin-off, not information.
+- **Gates → three buckets** (`rank.py`) — absolute thresholds (not top-N) sort
+  survivors into `momentum`, `dislocation`, and `high_participation_low_resolution`
+  (heavy volume, price barely moved — deliberately not called "accumulation",
+  since the pattern is equally consistent with distribution, a block cross,
+  or index flow). A quiet day can return a short list, or none.
+- **Scoring** — an orthogonalised, percentile-rank blend across the surviving
+  names: an *attention* ranking (how much research time a name deserves
+  tonight), not a probability and not fitted to anything.
+- **Episode tracking** (`episodes.py`) — the unit of analysis is an episode,
+  not a ticker-day. A name's trigger extends its open episode if the previous
+  one was within 5 trading sessions; a longer gap starts a new one. Tracks
+  `event_age`, `days_triggered`, `max_score`, `first_trigger_date`.
+- **Mechanical-flow tagging** (`flow_calendar.py`) — known index-rebalance and
+  options-expiry days (S&P, FTSE Russell, Nasdaq-100, MSCI) are *tagged*
+  (`mechanical_flow_possible`), never excluded: forced flow is real
+  supply/demand information, just not fundamental information.
+- **Sector mapping** (`sic.py`) — SEC-sourced SIC→sector lookup (Polygon's
+  bulk endpoint doesn't provide it), cached locally, used to cluster
+  observations for the evaluation harness's confidence intervals.
+- **Signal log** (`data/signals/`) — every flag, permanently, from day one.
+  This is evidence, not cache, and is committed to the repo.
+- **Email** (`mailer.py`) — the nightly report is sent by SMTP (stdlib only)
+  after the report file and signal log are already written, so a mail
+  failure never costs the day's data. `--no-email` / `testmail` for testing.
+- **Evaluate** (`evaluate`) — once signals accumulate, joins them to
+  subsequent prices and reports forward returns at both the ticker-day and
+  episode level, with cluster-bootstrapped confidence intervals (clustering
+  by date × sector, so one shared shock across many names counts as one
+  observation, not many), plus MFE/MAE and event-time curves showing whether
+  a signal continues, fades, or reverses.
+
 ## Run it now, without an API key
 
 ```bash
@@ -18,16 +65,20 @@ the scanner finds the six and suppresses the seventh, the wiring is correct.
 ## Run it on real data
 
 ```bash
-export POLYGON_API_KEY=...
+# .env: POLYGON_API_KEY=... (and, optionally, SMTP_* + REPORT_RECIPIENT for email)
 python main.py universe          # snapshot point-in-time universe membership
 python main.py backfill --days 520
+python main.py sic-update        # optional, one-off/monthly: backfills the sector map
 python main.py scan              # nightly
 ```
 
-Then nightly at ~22:00 London:
+`run_scan.sh` wraps the nightly `universe` + `scan` calls (activating the venv
+and loading `.env` first) and is what's actually scheduled — via `launchd` on
+macOS (`~/Library/LaunchAgents/com.scanner.daily.plist`, Mon–Fri 22:00) or an
+equivalent cron entry elsewhere:
 
 ```cron
-0 22 * * 1-5 cd /path/to/stock_scanner && python main.py universe && python main.py scan
+0 22 * * 1-5 /path/to/stock_scanner/run_scan.sh
 ```
 
 ## Commands
@@ -37,7 +88,10 @@ Then nightly at ~22:00 London:
 | `demo` | synthetic data + full run, no API key needed |
 | `backfill --days N` | pull N sessions of grouped daily aggregates |
 | `universe` | snapshot today's universe membership (run daily) |
-| `scan` | compute features, rank, print + log |
+| `sic-update` | refresh the SEC SIC→sector cache (not on the scan path) |
+| `scan` | compute features, rank, print, log, and email the report |
+| `scan --no-email` | same, without sending the email (for testing) |
+| `testmail` | send a single test email to verify SMTP config |
 | `diagnose` | feature correlations and gate hit-rates |
 | `evaluate` | forward returns on logged signals |
 

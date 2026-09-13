@@ -112,3 +112,9 @@ FORWARD_HORIZONS = (1, 5, 20)  # trading days, for the evaluation harness
 # the whole path from trigger to tau sessions later.
 MFE_MAE_WINDOW = 20        # sessions after trigger over which MFE/MAE are taken
 EVENT_TIME_MAX_TAU = 60    # sessions after trigger the event-time curve covers
+
+# ---------------------------------------------------------------- email
+# "Breadth" in the email subject line: today's raw gate crossings vs their
+# own trailing 90-day median (same numbers as the report's "crossings:" line).
+BREADTH_QUIET_RATIO = 0.5      # today <= this x median -> "quiet"
+BREADTH_ELEVATED_RATIO = 1.5   # today <= this x median -> "normal", above -> "elevated"

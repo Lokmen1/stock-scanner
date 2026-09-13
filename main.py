@@ -4,10 +4,12 @@
     python main.py demo              generate synthetic data and run (no API key)
     python main.py backfill --days N pull N sessions of real data from Polygon
     python main.py universe          snapshot today's point-in-time universe
-    python main.py scan              run the scan, print and save the report
+    python main.py scan              run the scan, print, save, log and email the report
+    python main.py scan --no-email   same, without sending the email (for testing)
     python main.py evaluate          forward-return analysis of logged signals
     python main.py diagnose          feature correlations and threshold hit rates
     python main.py sic-update        refresh the SEC SIC-code cache (not on the scan path)
+    python main.py testmail          send a single test email to verify SMTP config
 """
 from __future__ import annotations
 
@@ -28,9 +30,13 @@ import report as REP
 import sic as SIC
 
 
-def cmd_scan(args, prices_dir=None, universe_dir=None, log=True) -> None:
+def cmd_scan(args, prices_dir=None, universe_dir=None, log=True, email=None) -> None:
     """`prices_dir`/`universe_dir`/`log` let `demo` route through the synthetic
-    sandbox instead of real data — real `scan` invocations never pass these."""
+    sandbox instead of real data — real `scan` invocations never pass these.
+    `email` defaults to the `--no-email` CLI flag when not explicitly
+    overridden; `demo` always passes email=False."""
+    if email is None:
+        email = not getattr(args, "no_email", False)
     import download as D
     prices = D.load_prices(days=C.HISTORY_DAYS, prices_dir=prices_dir)
     ref = D.latest_universe(universe_dir=universe_dir)
@@ -68,6 +74,17 @@ def cmd_scan(args, prices_dir=None, universe_dir=None, log=True) -> None:
     if log:
         REP.log_signals(buckets, last, mechanical_flow_possible=bool(flow_events))
     print(f"  saved: {path}")
+
+    # Email happens LAST, after the report and signals are already durably
+    # written — a mail failure must never cost the day's data. Never let it
+    # crash the scheduled job: log the failure and return normally (exit 0).
+    if email:
+        try:
+            import mailer as MAIL
+            MAIL.send_report(last, text, buckets, crossings_today, crossings_median)
+            print("  emailed report.")
+        except Exception as e:
+            print(f"  email failed: {e}", file=sys.stderr)
 
 
 def cmd_evaluate(args) -> None:
@@ -116,6 +133,17 @@ def cmd_universe(args) -> None:
         sys.exit("Set POLYGON_API_KEY in your environment first.")
     df = D.snapshot_universe()
     print(f"  snapshotted {len(df):,} common stocks")
+
+
+def cmd_testmail(args) -> None:
+    """Send a single test email so SMTP config can be verified without
+    waiting for the scheduled 22:00 run."""
+    import mailer as MAIL
+    try:
+        MAIL.send_test()
+    except Exception as e:
+        sys.exit(f"test email FAILED: {e}")
+    print("  test email sent.")
 
 
 def cmd_sic_update(args) -> None:
@@ -243,7 +271,7 @@ def cmd_demo(args) -> None:
     print(f"  generated {n_days} sessions × {n_names} names")
     print("  planted: S0001-2 momentum | S0003-4 dislocation | "
           "S0005-6 high-participation | S0007 corp-action (should be suppressed)\n")
-    cmd_scan(args, prices_dir=C.DEMO_PRICES, universe_dir=C.DEMO_UNIVERSE, log=False)
+    cmd_scan(args, prices_dir=C.DEMO_PRICES, universe_dir=C.DEMO_UNIVERSE, log=False, email=False)
     _print_plant_check()
 
 
@@ -296,12 +324,16 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("scan").set_defaults(fn=cmd_scan)
+    s = sub.add_parser("scan")
+    s.add_argument("--no-email", action="store_true",
+                   help="skip emailing the report (for testing)")
+    s.set_defaults(fn=cmd_scan)
     sub.add_parser("demo").set_defaults(fn=cmd_demo)
     sub.add_parser("evaluate").set_defaults(fn=cmd_evaluate)
     sub.add_parser("diagnose").set_defaults(fn=cmd_diagnose)
     sub.add_parser("universe").set_defaults(fn=cmd_universe)
     sub.add_parser("sic-update").set_defaults(fn=cmd_sic_update)
+    sub.add_parser("testmail").set_defaults(fn=cmd_testmail)
     b = sub.add_parser("backfill")
     b.add_argument("--days", type=int, default=520)
     b.set_defaults(fn=cmd_backfill)
