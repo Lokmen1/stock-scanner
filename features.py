@@ -42,8 +42,13 @@ def _classic_z(s: pd.Series, window: int, min_obs: int) -> pd.Series:
     return (s - mu) / sd
 
 
-def compute(df: pd.DataFrame) -> pd.DataFrame:
-    """Add all features. Expects columns: date, ticker, open, high, low, close, volume."""
+def compute(df: pd.DataFrame, ref: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Add all features. Expects columns: date, ticker, open, high, low, close, volume.
+
+    `ref` (universe reference data, with a shares_outstanding column) is
+    optional and only needed for float_turnover — pass the same `ref` used
+    for apply_universe(), or omit it and that one column comes back NaN.
+    """
     z = _robust_z if C.ROBUST_SCALE else _classic_z
     df = df.sort_values(["ticker", "date"]).copy()
     g = df.groupby("ticker", sort=False)
@@ -78,6 +83,10 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         df[f"bd_{w}"] = df["close"] / lo - 1.0
     df["breakout"] = df[[f"bo_{w}" for w in C.BREAKOUT_WINDOWS]].max(axis=1)
     df["breakout_label"] = _breakout_label(df)
+    # Distance from the highest close anywhere in the STORED history — not
+    # literally all-time, just as far back as this run's price data reaches.
+    ath = g["close"].transform(lambda x: x.shift(1).expanding().max())
+    df["bo_all"] = df["close"] / ath - 1.0
 
     # ---- market-relative return -------------------------------------------
     mkt = df.groupby("date")["ret_1d"].transform("median")
@@ -91,6 +100,57 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
         (df["ret_1d"].abs() > C.CORP_ACTION_RET_GUARD)
         & (df["vol_z"].fillna(0) < C.CORP_ACTION_VOL_FLOOR)
     )
+
+    # ---- continuation features ----------------------------------------------
+    # Deterministic columns only. NOT inputs to score_day's weighted blend —
+    # no continuation score, no expected move, no price target. The point is
+    # to log enough shape/context that weights can be FITTED from forward
+    # returns later (evaluate()'s job), not asserted now.
+
+    # Close Location Value: where in the day's range the close landed.
+    # 1.0 = closed at the high, 0.0 = closed at the low. Undefined (NaN) on a
+    # zero-range session.
+    day_range = df["high"] - df["low"]
+    df["clv"] = ((df["close"] - df["low"]) / day_range).where(day_range > 1e-9)
+
+    # Gap retention: of the overnight gap (open vs prior close), how much
+    # survived to the close? >1 means the session extended the gap, <0 means
+    # it fully reversed it. Undefined on a negligible gap — a few-cent open
+    # vs prior close would make this ratio noise, not signal.
+    gap_abs = df["open"] - df["prev_close"]
+    min_gap = C.GAP_RETENTION_MIN_GAP * df["prev_close"].abs()
+    df["gap_retention"] = ((df["close"] - df["prev_close"]) / gap_abs).where(gap_abs.abs() > min_gap)
+
+    # RVOL: recent dollar volume (1/3/5-day, including today) against the
+    # prior-20-day baseline already computed as adv_20.
+    df["rvol_1"] = df["dollar_volume"] / df["adv_20"]
+    df["rvol_3"] = g["dollar_volume"].transform(lambda x: x.rolling(3).mean()) / df["adv_20"]
+    df["rvol_5"] = g["dollar_volume"].transform(lambda x: x.rolling(5).mean()) / df["adv_20"]
+
+    # Pre-event compression: was the name unusually quiet right before today,
+    # relative to its own longer-run range? Both windows are shifted to
+    # exclude today — this describes the setup BEFORE the trigger, not today
+    # itself.
+    true_range = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - df["prev_close"]).abs(),
+        (df["low"] - df["prev_close"]).abs(),
+    ], axis=1).max(axis=1)
+    df["true_range"] = true_range
+    atr_short = g["true_range"].transform(
+        lambda x: x.shift(1).rolling(C.ATR_SHORT_WINDOW).mean())
+    atr_long = g["true_range"].transform(
+        lambda x: x.shift(1).rolling(C.ATR_LONG_WINDOW).mean())
+    df["pre_event_compression"] = atr_short / atr_long.where(atr_long > 1e-9)
+
+    # Float turnover: only where the universe reference data supplies a share
+    # count. Missing share counts -> NaN, not a silent zero.
+    if ref is not None and "shares_outstanding" in ref.columns:
+        shares = df["ticker"].map(ref.set_index("ticker")["shares_outstanding"])
+        df["float_turnover"] = (df["volume"] / shares).where(shares > 0)
+    else:
+        df["float_turnover"] = np.nan
+
     return df
 
 

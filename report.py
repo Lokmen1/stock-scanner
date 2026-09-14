@@ -79,10 +79,15 @@ def render(buckets: dict, date: pd.Timestamp, n_universe: int,
     titles = {
         "momentum": ("MOMENTUM ANOMALIES", "unusual upside on unusual volume"),
         "dislocation": ("DISLOCATION ANOMALIES", "unusual downside on unusual volume"),
-        "high_participation_low_resolution": (
-            "HIGH PARTICIPATION, LOW RESOLUTION",
-            "heavy volume, price has not moved — could be accumulation, distribution, "
-            "a block cross, or index flow"),
+        "mechanical_flow": (
+            "MECHANICAL FLOW",
+            "heavy volume, price has not moved — explained: a known index/options-"
+            "flow day, or a large overnight gap typical of a corporate adjustment"),
+        "unexplained_participation": (
+            "UNEXPLAINED PARTICIPATION",
+            "heavy volume, price has not moved, and nothing on the calendar "
+            "explains it — could be accumulation, distribution, a block cross, "
+            "or something not yet public"),
     }
     for key, (title, sub) in titles.items():
         df = buckets.get(key, pd.DataFrame())
@@ -103,7 +108,11 @@ def render(buckets: dict, date: pd.Timestamp, n_universe: int,
 LOG_COLS = ["date", "ticker", "bucket", "score", "close", "ret_1d",
             "ret_z", "vol_z", "rel_ret", "gap", "breakout", "industry", "sic_division",
             "event_id", "event_age", "days_triggered", "max_score", "first_trigger_date",
-            "mechanical_flow_possible"]
+            "mechanical_flow_possible",
+            # Continuation features — deterministic, NOT inputs to score_day.
+            "clv", "gap_retention", "rvol_1", "rvol_3", "rvol_5",
+            "bo_20", "bo_60", "bo_252", "bo_all",
+            "pre_event_compression", "float_turnover"]
 
 
 _SYNTHETIC_TICKER = re.compile(r"^S\d{4}$")

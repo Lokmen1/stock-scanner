@@ -203,8 +203,8 @@ def score_day(today: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------ buckets
-def bucket(d: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Three behaviourally distinct lists, each behind an ABSOLUTE gate.
+def bucket(d: pd.DataFrame, mechanical_flow_possible: bool = False) -> dict[str, pd.DataFrame]:
+    """Four behaviourally distinct lists, each behind an ABSOLUTE gate.
 
     The absolute gates are the point. A pure top-N ranking emits N names every
     evening whether or not anything happened, so on a quiet Tuesday the list is
@@ -216,16 +216,30 @@ def bucket(d: pd.DataFrame) -> dict[str, pd.DataFrame]:
     momentum = d[(d["ret_z"] >= C.Z_RETURN_GATE) & (d["vol_z"] >= C.Z_VOLUME_GATE)]
     dislocation = d[(d["ret_z"] <= -C.Z_RETURN_GATE) & (d["vol_z"] >= C.Z_VOLUME_GATE)]
     # Heavy volume, little price movement: someone is transacting size and the
-    # price has not resolved it yet. The only one of the three that is not
-    # already visible on every free screener. Deliberately NOT called
-    # "accumulation" — there is a seller for every buyer, and this pattern is
-    # equally consistent with distribution, block crossing, or index flow.
+    # price has not resolved it yet. Deliberately NOT called "accumulation" —
+    # there is a seller for every buyer, and this pattern is equally
+    # consistent with distribution, block crossing, or index flow.
     high_participation = d[(d["vol_z"] >= C.Z_VOLUME_STRONG) & (d["ret_z"].abs() <= C.Z_RETURN_QUIET)]
+
+    # Split, not filtered — both halves are reported. A name's spot here is
+    # EXPLAINED (accounted for, not necessarily fundamental) if today is a
+    # known mechanical-flow day for the whole tape (mechanical_flow_possible,
+    # from flow_calendar.py), or if THIS name shows a large overnight gap
+    # typical of a corporate/technical adjustment (ex-div, spin-off, an
+    # uncaptured split) even though the full session stayed flat — that
+    # combination is the signature suspect_corp_action already excludes at
+    # the extreme end; this catches the milder cases still consistent with
+    # "heavy volume, price hasn't resolved."
+    corp_event = high_participation["gap_z"].abs() >= C.Z_RETURN_GATE
+    explained = mechanical_flow_possible | corp_event
+    mechanical_flow = high_participation[explained]
+    unexplained_participation = high_participation[~explained]
 
     return {
         "momentum": momentum.nlargest(C.MAX_PER_BUCKET, "score"),
         "dislocation": dislocation.nlargest(C.MAX_PER_BUCKET, "score"),
-        "high_participation_low_resolution": high_participation.nlargest(C.MAX_PER_BUCKET, "vol_z"),
+        "mechanical_flow": mechanical_flow.nlargest(C.MAX_PER_BUCKET, "vol_z"),
+        "unexplained_participation": unexplained_participation.nlargest(C.MAX_PER_BUCKET, "vol_z"),
     }
 
 

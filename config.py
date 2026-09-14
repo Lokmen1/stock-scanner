@@ -54,6 +54,13 @@ HISTORY_DAYS = 520            # ~2 years of trading days to retain
 MAD_SCALE = 1.4826
 ROBUST_SCALE = True
 
+# Continuation features (deterministic columns only — see features.py). These
+# are NOT inputs to score_day's weighted blend; the weights on any of them
+# will be fitted from forward returns later, not asserted now.
+GAP_RETENTION_MIN_GAP = 0.001   # min |open/prev_close - 1| before gap_retention is computed, else NaN
+ATR_SHORT_WINDOW = 5            # pre-event compression numerator: ATR over this many PRIOR sessions
+ATR_LONG_WINDOW = 60            # ...divided by ATR over this many prior sessions
+
 # ---------------------------------------------------------------- thresholds
 # Absolute gates. These are what let the scanner return FEWER than N names —
 # or none at all — on a quiet day. Rank-based scoring alone cannot do that.

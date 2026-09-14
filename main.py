@@ -42,7 +42,7 @@ def cmd_scan(args, prices_dir=None, universe_dir=None, log=True, email=None) -> 
     ref = D.latest_universe(universe_dir=universe_dir)
     ref = SIC.attach_sic(ref) if not ref.empty else ref
 
-    feats = F.compute(prices)
+    feats = F.compute(prices, ref=ref if not ref.empty else None)
     inv = R.apply_universe(feats, ref if not ref.empty else None)
 
     last = inv["date"].max()
@@ -56,14 +56,14 @@ def cmd_scan(args, prices_dir=None, universe_dir=None, log=True, email=None) -> 
         [R.raw_crossings(g) for _, g in hist90.groupby("date")])
     crossings_median = hist_crossings.median().to_dict()
 
+    flow_events = FLOW.known_flow_events(last)
     scored = R.score_day(today)
-    buckets = R.bucket(scored)
+    buckets = R.bucket(scored, mechanical_flow_possible=bool(flow_events))
     history = REP.load_signal_log() if log else pd.DataFrame()
     trading_days = pd.DatetimeIndex(sorted(inv["date"].unique()))
     buckets = {k: EP.assign_episodes(v, history, trading_days, last)
                for k, v in buckets.items()}
 
-    flow_events = FLOW.known_flow_events(last)
     text = REP.render(buckets, last, n_universe,
                       flow_events=flow_events, corp_flags=corp_flags,
                       crossings_today=crossings_today, crossings_median=crossings_median)
@@ -95,8 +95,8 @@ def cmd_evaluate(args) -> None:
 def cmd_diagnose(args) -> None:
     import download as D
     prices = D.load_prices(days=C.HISTORY_DAYS)
-    feats = F.compute(prices)
     ref = D.latest_universe()
+    feats = F.compute(prices, ref=ref if not ref.empty else None)
     inv = R.apply_universe(feats, ref if not ref.empty else None)
     recent = inv[inv["date"] >= inv["date"].max() - pd.Timedelta(days=90)]
 
@@ -245,18 +245,27 @@ def cmd_demo(args) -> None:
         close, volume = solve_plant(t, z_ret, z_vol)
         prev = df[(df["ticker"] == t) & (df["date"] == dates[-2])]["close"].iloc[0]
         m = (df["ticker"] == t) & (df["date"] == last)
+        opn = prev * (1 + (close / prev - 1) * 0.6)
         df.loc[m, "close"] = close
-        df.loc[m, "open"] = prev * (1 + (close / prev - 1) * 0.6)
+        df.loc[m, "open"] = opn
         df.loc[m, "volume"] = volume
+        # high/low were set from the PRE-plant open/close above; recompute so
+        # low <= close <= high still holds (CLV, true range depend on it).
+        df.loc[m, "high"] = max(opn, close) * 1.01
+        df.loc[m, "low"] = min(opn, close) * 0.99
 
     # Corp-action plant: big move on ORDINARY volume — should be suppressed.
     t = "S0007"
     prev = df[(df["ticker"] == t) & (df["date"] == dates[-2])]["close"].iloc[0]
     ret = MARGIN * C.CORP_ACTION_RET_GUARD
     m = (df["ticker"] == t) & (df["date"] == last)
-    df.loc[m, "close"] = prev * (1 + ret)
-    df.loc[m, "open"] = prev * (1 + ret * 0.6)
+    close = prev * (1 + ret)
+    opn = prev * (1 + ret * 0.6)
+    df.loc[m, "close"] = close
+    df.loc[m, "open"] = opn
     df.loc[m, "volume"] = df[df["ticker"] == t]["volume"].median()
+    df.loc[m, "high"] = max(opn, close) * 1.01
+    df.loc[m, "low"] = min(opn, close) * 0.99
 
     for d, g in df.groupby("date"):
         g.to_parquet(C.DEMO_PRICES / f"{d:%Y-%m-%d}.parquet", index=False)
@@ -280,8 +289,8 @@ def _print_plant_check() -> None:
     pass/fail is visible with its margin, not just as a name on the report."""
     import download as D
     prices = D.load_prices(days=C.HISTORY_DAYS, prices_dir=C.DEMO_PRICES)
-    feats = F.compute(prices)
     ref = D.latest_universe(universe_dir=C.DEMO_UNIVERSE)
+    feats = F.compute(prices, ref=ref if not ref.empty else None)
     inv = R.apply_universe(feats, ref if not ref.empty else None)
     today = inv[inv["date"] == inv["date"].max()].set_index("ticker")
 
