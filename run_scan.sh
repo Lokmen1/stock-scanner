@@ -8,5 +8,6 @@ set -a
 source .env
 set +a
 
+python main.py backfill --days 1
 python main.py universe
 python main.py scan
