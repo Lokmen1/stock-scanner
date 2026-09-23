@@ -72,14 +72,24 @@ python main.py sic-update        # optional, one-off/monthly: backfills the sect
 python main.py scan              # nightly
 ```
 
-`run_scan.sh` wraps the nightly `universe` + `scan` calls (activating the venv
-and loading `.env` first) and is what's actually scheduled — via `launchd` on
-macOS (`~/Library/LaunchAgents/com.scanner.daily.plist`, Mon–Fri 22:00) or an
+`run_scan.sh` wraps the `backfill --days 1` + `universe` + `scan` calls
+(activating the venv and loading `.env` first) and is what's actually
+scheduled — via `launchd` on macOS
+(`~/Library/LaunchAgents/com.scanner.daily.plist`, Mon–Fri 07:00) or an
 equivalent cron entry elsewhere:
 
 ```cron
-0 22 * * 1-5 /path/to/stock_scanner/run_scan.sh
+0 7 * * 1-5 /path/to/stock_scanner/run_scan.sh
 ```
+
+Runs in the **morning**, not right after the prior close. `backfill`'s
+`--days N` always stops at "yesterday relative to when it runs" (`main.py`
+`cmd_backfill`), because Polygon's grouped-daily aggregates for a session
+aren't reliably finalized right after that session's own close. Run the job
+that same evening and "yesterday" is one session behind the close you actually
+want; run it the next morning and "yesterday" IS the most recent close, by
+then fully finalized. The report is dated by session (`last`, not send time),
+so a Wednesday-morning email is headed `Scan 2026-09-22` — Tuesday's close.
 
 ## Commands
 
