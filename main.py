@@ -137,7 +137,7 @@ def cmd_universe(args) -> None:
 
 def cmd_testmail(args) -> None:
     """Send a single test email so SMTP config can be verified without
-    waiting for the scheduled 22:00 run."""
+    waiting for the scheduled 07:00 run."""
     import mailer as MAIL
     try:
         MAIL.send_test()

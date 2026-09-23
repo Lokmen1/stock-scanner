@@ -1,4 +1,4 @@
-"""Email delivery for the nightly report. Stdlib only (smtplib + email.message)
+"""Email delivery for the morning report. Stdlib only (smtplib + email.message)
 — no new dependency for something this small.
 
 Config comes from the environment (SMTP_HOST, SMTP_PORT, SMTP_USER,
@@ -99,17 +99,21 @@ def _breadth_label(crossings_today: dict, crossings_median: dict) -> str:
 
 def build_subject(date, buckets: dict, crossings_today: dict | None = None,
                    crossings_median: dict | None = None) -> str:
+    """Includes the session's weekday (e.g. 'Mon 2026-09-21') because the
+    report now arrives the following morning — on a different weekday than
+    the close it covers — so the inbox subject line alone must make clear
+    which session's close this is, without opening the email."""
     counts = {k: len(v) for k, v in buckets.items()}
     total = sum(counts.values())
     parts = " / ".join(f"{BUCKET_ABBR[k]} {counts.get(k, 0)}" for k in BUCKET_ORDER)
     breadth = _breadth_label(crossings_today or {}, crossings_median or {})
-    return f"Scan {date:%Y-%m-%d} — {total} flags ({parts}) — breadth: {breadth}"
+    return f"Close {date:%a} {date:%Y-%m-%d} — {total} flags ({parts}) — breadth: {breadth}"
 
 
 def send_report(date, report_text: str, buckets: dict,
                  crossings_today: dict | None = None,
                  crossings_median: dict | None = None) -> None:
-    """Send the nightly report. Raises on any failure — callers (cmd_scan)
+    """Send the morning report. Raises on any failure — callers (cmd_scan)
     decide whether to swallow it; the report/log are already persisted by the
     time this is called, so a mail failure never costs the day's data."""
     cfg = _config()
@@ -128,6 +132,6 @@ def send_test() -> None:
     text = ("This is a test message from the stock scanner's mailer.py.\n"
             "If you received this, SMTP_HOST/PORT/USER/PASSWORD and "
             "REPORT_RECIPIENT are configured correctly. A .txt attachment\n"
-            "should be included too — that's how the nightly report arrives.\n")
+            "should be included too — that's how the morning report arrives.\n")
     _send("Stock scanner — test email", text, _html_wrap(text), cfg,
           attach_filename="test.txt", attach_text=text)
